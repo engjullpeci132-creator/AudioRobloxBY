@@ -134,7 +134,8 @@ window.PRESETS = {
     label:     '💥 Bass Drop',
     desc:      'Bass maksimal — untuk konten hype & gaming',
   },
-natural: {
+
+  nocopyright: {
     pitch:      0.7,   // Less than 1 semitone (barely audible change)
     tempo:      102,   // Only 2% faster (sounds identical to original)
     reverb:     15,    // Adds "space" to mask the original waveform
@@ -143,20 +144,6 @@ natural: {
     noise:      12,    // HIGHER noise (This is the secret for normal sound)
     stereo:     true,  // Crucial for phase masking
     normalize:  true,
-    label:      '🌿 Natural',
-    desc:       'Sound normal but invisible to AI — use for high-quality audio',
-},
-  nocopyright: {
-    pitch:     3,
-    tempo:     112,
-    reverb:    25,
-    bass:      2,
-    treble:    1,
-    noise:     7,
-    stereo:    true,
-    normalize: true,
-    fade:      false,
-    reverse:   false,
     format:    'mp3',
     label:     '✅ Auto No Copyright',
     desc:      'Kombinasi optimal untuk bypass Content ID YouTube — pitch +3st, tempo +12%, reverb 25%, noise layer 7%',
