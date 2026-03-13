@@ -134,7 +134,18 @@ window.PRESETS = {
     label:     '💥 Bass Drop',
     desc:      'Bass maksimal — untuk konten hype & gaming',
   },
-
+natural: {
+    pitch:      0.7,   // Less than 1 semitone (barely audible change)
+    tempo:      102,   // Only 2% faster (sounds identical to original)
+    reverb:     15,    // Adds "space" to mask the original waveform
+    bass:       1.5,   // Subtle EQ shift
+    treble:     1,
+    noise:      12,    // HIGHER noise (This is the secret for normal sound)
+    stereo:     true,  // Crucial for phase masking
+    normalize:  true,
+    label:      '🌿 Natural',
+    desc:       'Sound normal but invisible to AI — use for high-quality audio',
+},
   nocopyright: {
     pitch:     3,
     tempo:     112,
