@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="description" content="AudioRobloxBY — Free anti-copyright audio remix studio. Upload, remix, download. YouTube, TikTok, SoundCloud to MP3."/>
+  <title>AudioRobloxBY — Anti Copyright Remix Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-icon">◈</span>
+      <div class="brand-text">
+        <span class="brand-name">AudioRobloxBY</span>
+        <span class="brand-sub">ANTI COPYRIGHT AUDIO</span>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <span class="nav-label">MENU</span>
+      <a href="#" class="nav-item active" data-page="studio">
+        <span class="nav-icon">⬡</span> Remix Studio
+      </a>
+      <a href="#" class="nav-item" data-page="playlist">
+        <span class="nav-icon">♪</span> Playlist
+      </a>
+      <a href="#" class="nav-item" data-page="favorites">
+        <span class="nav-icon">★</span> Favorit
+        <span class="badge" id="fav-count">0</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-section">
+      <span class="nav-label">PLAYLIST SAYA</span>
+      <button class="btn-new-playlist" id="btn-new-playlist">
+        <span>+</span> Buat Playlist
+      </button>
+      <div class="playlist-list" id="sidebar-playlists">
+        <!-- dynamic -->
+      </div>
+    </div>
+
+    <div class="sidebar-footer">
+      <span class="version-tag">v1.0.0</span>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="main">
+
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <div class="topbar-breadcrumb">
+        Upload → Remix → Download — <span class="accent">100% Lokal di browser</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn-upload-audio" id="btn-upload-top">
+          <span class="btn-icon">↑</span> Upload Audio
+        </button>
+        <button class="btn-preview-top" id="btn-preview-top">
+          ▶ Preview
+        </button>
+      </div>
+    </header>
+
+    <!-- DOWNLOADER PANEL -->
+    <section class="panel" id="panel-downloader">
+      <div class="panel-title">
+        <span class="panel-dot"></span>
+        DOWNLOAD MP3 DARI YOUTUBE / TIKTOK / SOUNDCLOUD
+      </div>
+      <p class="panel-hint">Paste link → pilih platform → download MP3 di sana → upload ke sini</p>
+
+      <div class="input-row">
+        <input
+          type="text"
+          id="url-input"
+          class="url-input"
+          placeholder="Paste link YouTube atau TikTok..."
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+
+      <div class="platform-btns">
+        <button class="btn-platform yt" id="btn-yt">
+          ▶ YouTube → MP3
+        </button>
+        <button class="btn-platform tt" id="btn-tt">
+          ♪ TikTok → MP3
+        </button>
+        <button class="btn-platform sc" id="btn-sc">
+          ☁ SoundCloud → MP3
+        </button>
+      </div>
+
+      <div class="tip-row" id="downloader-tip" style="display:none;">
+        <span class="tip-icon">💡</span>
+        <span id="tip-text"></span>
+      </div>
+
+      <p class="panel-note">
+        💡 Setelah MP3 tersimpan di HP, upload di <strong>Upload File Audio</strong> di bawah → pilih
+        <strong>Auto No Copyright</strong> → <strong>PROSES REMIX</strong>
+      </p>
+    </section>
+
+    <!-- UPLOAD PANEL -->
+    <section class="panel" id="panel-upload">
+      <div class="panel-title">
+        <span class="panel-dot"></span>
+        UPLOAD FILE AUDIO
+      </div>
+
+      <div class="dropzone" id="dropzone">
+        <div class="dropzone-inner">
+          <div class="drop-icon">⬡</div>
+          <div class="drop-label">Drag & Drop File Audio</div>
+          <div class="drop-formats">MP3 · WAV · OGG · FLAC · M4A — atau klik untuk pilih</div>
+        </div>
+        <input type="file" id="file-input" accept=".mp3,.wav,.ogg,.flac,.m4a" hidden/>
+      </div>
+
+      <div class="audio-info" id="audio-info" style="display:none;">
+        <div class="audio-info-name" id="audio-info-name"></div>
+        <div class="audio-info-meta" id="audio-info-meta"></div>
+        <button class="btn-clear-audio" id="btn-clear-audio">✕ Hapus</button>
+      </div>
+    </section>
+
+    <!-- WAVEFORM PANEL -->
+    <section class="panel" id="panel-waveform">
+      <div class="panel-title">
+        <span class="panel-dot"></span>
+        WAVEFORM
+      </div>
+      <div class="waveform-container" id="waveform-container">
+        <div class="waveform-placeholder" id="waveform-placeholder">
+          <span>Upload audio untuk melihat waveform</span>
+        </div>
+        <div id="waveform" style="display:none;"></div>
+        <div class="waveform-controls" id="waveform-controls" style="display:none;">
+          <button class="wc-btn" id="wc-play">▶</button>
+          <button class="wc-btn" id="wc-stop">■</button>
+          <span class="wc-time" id="wc-time">0:00 / 0:00</span>
+          <input type="range" class="wc-seek" id="wc-seek" min="0" max="100" value="0" step="0.1"/>
+          <span class="wc-vol-label">Vol</span>
+          <input type="range" class="wc-vol" id="wc-vol" min="0" max="1" value="1" step="0.01"/>
+        </div>
+      </div>
+    </section>
+
+    <!-- REMIX CONTROLS PANEL -->
+    <section class="panel" id="panel-remix">
+
+      <!-- TAB BAR -->
+      <div class="remix-tabs">
+        <button class="rtab active" data-tab="presets">⚡ Presets</button>
+        <button class="rtab" data-tab="controls">⊞ Controls</button>
+        <button class="rtab" data-tab="options">⚙ Options</button>
+      </div>
+
+      <!-- PRESETS TAB -->
+      <div class="rtab-content active" id="tab-presets">
+        <div class="preset-chips">
+          <button class="chip" data-preset="light">🔆 Light</button>
+          <button class="chip" data-preset="medium">🟠 Medium</button>
+          <button class="chip" data-preset="heavy">🔴 Heavy</button>
+          <button class="chip" data-preset="lofi">🎵 Lo-Fi</button>
+          <button class="chip" data-preset="chipmunk">🐿 Chipmunk</button>
+          <button class="chip" data-preset="slowdeep">🌊 Slow Deep</button>
+          <button class="chip" data-preset="vaporwave">🌸 Vaporwave</button>
+          <button class="chip" data-preset="bassdrop">💥 Bass Drop</button>
+          <button class="chip active" data-preset="nocopyright">✅ Auto No Copyright</button>
+        </div>
+        <div class="tip-row">
+          <span class="tip-icon">💡</span>
+          <span>Kombinasi pitch +2–4 st + tempo #10–15% + reverb 15–30% sudah cukup untuk bypass Content ID YouTube. Noise Layer untuk anti-fingerprint ekstra.</span>
+        </div>
+      </div>
+
+      <!-- CONTROLS TAB -->
+      <div class="rtab-content" id="tab-controls">
+        <div class="controls-grid">
+          <div class="ctrl-group">
+            <label class="ctrl-label">Pitch <span class="ctrl-val" id="val-pitch">0 st</span></label>
+            <input type="range" class="ctrl-slider" id="ctrl-pitch" min="-12" max="12" value="0" step="0.5"/>
+          </div>
+          <div class="ctrl-group">
+            <label class="ctrl-label">Tempo <span class="ctrl-val" id="val-tempo">100%</span></label>
+            <input type="range" class="ctrl-slider" id="ctrl-tempo" min="50" max="200" value="100" step="1"/>
+          </div>
+          <div class="ctrl-group">
+            <label class="ctrl-label">Reverb <span class="ctrl-val" id="val-reverb">0%</span></label>
+            <input type="range" class="ctrl-slider" id="ctrl-reverb" min="0" max="100" value="0" step="1"/>
+          </div>
+          <div class="ctrl-group">
+            <label class="ctrl-label">Bass Boost <span class="ctrl-val" id="val-bass">0 dB</span></label>
+            <input type="range" class="ctrl-slider" id="ctrl-bass" min="-12" max="12" value="0" step="1"/>
+          </div>
+          <div class="ctrl-group">
+            <label class="ctrl-label">Treble <span class="ctrl-val" id="val-treble">0 dB</span></label>
+            <input type="range" class="ctrl-slider" id="ctrl-treble" min="-12" max="12" value="0" step="1"/>
+          </div>
+          <div class="ctrl-group">
+            <label class="ctrl-label">Noise Layer <span class="ctrl-val" id="val-noise">0%</span></label>
+            <input type="range" class="ctrl-slider" id="ctrl-noise" min="0" max="30" value="0" step="1"/>
+          </div>
+        </div>
+      </div>
+
+      <!-- OPTIONS TAB -->
+      <div class="rtab-content" id="tab-options">
+        <div class="options-grid">
+          <label class="opt-row">
+            <input type="checkbox" id="opt-stereo" checked/>
+            <span>Stereo Widening</span>
+          </label>
+          <label class="opt-row">
+            <input type="checkbox" id="opt-normalize" checked/>
+            <span>Normalize Volume</span>
+          </label>
+          <label class="opt-row">
+            <input type="checkbox" id="opt-fade"/>
+            <span>Fade In / Out</span>
+          </label>
+          <label class="opt-row">
+            <input type="checkbox" id="opt-reverse"/>
+            <span>Reverse Audio</span>
+          </label>
+          <div class="opt-format">
+            <label class="ctrl-label">Output Format</label>
+            <select class="opt-select" id="opt-format">
+              <option value="mp3">MP3 (128kbps)</option>
+              <option value="mp3-320">MP3 (320kbps)</option>
+              <option value="wav">WAV (Lossless)</option>
+              <option value="ogg">OGG Vorbis</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ACTION BAR -->
+    <div class="action-bar">
+      <button class="btn-preview-main" id="btn-preview-main">
+        ▶ Preview
+      </button>
+      <button class="btn-process" id="btn-process">
+        <span class="process-icon">⬡</span>
+        <span id="process-label">PROSES REMIX</span>
+      </button>
+    </div>
+
+    <!-- PROGRESS BAR (hidden) -->
+    <div class="progress-wrap" id="progress-wrap" style="display:none;">
+      <div class="progress-bar">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <span class="progress-label" id="progress-label">Processing...</span>
+    </div>
+
+    <!-- RESULT (hidden) -->
+    <div class="result-panel" id="result-panel" style="display:none;">
+      <div class="result-title">✅ Remix Selesai!</div>
+      <div class="result-meta" id="result-meta"></div>
+      <div class="result-actions">
+        <button class="btn-download" id="btn-download">⬇ Download</button>
+        <button class="btn-save-playlist" id="btn-save-playlist">♪ Simpan ke Playlist</button>
+        <button class="btn-fav" id="btn-fav">★ Favorit</button>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- RIGHT PANEL — PLAYLIST HISTORY -->
+  <aside class="right-panel">
+    <div class="rp-header">
+      <span class="rp-title">Playlist</span>
+      <button class="rp-new" id="rp-new">Buat</button>
+    </div>
+    <div class="rp-empty" id="rp-empty">Belum ada playlist</div>
+    <div class="rp-section-label">RIWAYAT REMIX</div>
+    <div class="remix-history" id="remix-history">
+      <!-- dynamic items -->
+    </div>
+  </aside>
+
+  <!-- TOAST -->
+  <div class="toast" id="toast"></div>
+
+  <!-- SCRIPTS -->
+  <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+  <script src="modules/uploader.js"></script>
+  <script src="modules/waveform.js"></script>
+  <script src="modules/remixer.js"></script>
+  <script src="modules/presets.js"></script>
+  <script src="modules/downloader.js"></script>
+  <script src="modules/playlist.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
