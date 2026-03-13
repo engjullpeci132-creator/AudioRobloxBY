@@ -431,10 +431,15 @@ DOM.btnProcess.addEventListener('click', async () => {
     await sleep(400);
 
     showProgress(55, 'Memproses pitch & tempo...');
+    // Inject current preset key so remixer picks the right bypass profile
+    const paramsWithPreset = {
+      ...AppState.remixParams,
+      _preset: AppState.currentPreset || 'nocopyright',
+    };
     // Call remixer
     let resultBlob = null;
     if (window.RemixerModule) {
-      resultBlob = await window.RemixerModule.process(AppState.audioFile, AppState.remixParams);
+      resultBlob = await window.RemixerModule.process(AppState.audioFile, paramsWithPreset);
     } else {
       // Fallback: just return the original (modules not loaded yet)
       resultBlob = AppState.audioFile;
@@ -457,10 +462,14 @@ DOM.btnProcess.addEventListener('click', async () => {
     hideProgress();
 
     // Show result panel
-    const preset = AppState.currentPreset || 'custom';
-    const ext    = AppState.remixParams.format;
+    const preset  = AppState.currentPreset || 'custom';
+    const fmt     = window.lamejs ? 'MP3 128kbps' : 'WAV';
+    const origMB  = (AppState.audioFile.size / 1048576).toFixed(1);
+    const estMB   = window.lamejs
+      ? (AppState.audioFile.size / 1048576 * 1.05).toFixed(1)  // ~same size as input
+      : (AppState.audioFile.size / 1048576 * 10).toFixed(1);   // WAV is ~10x bigger warning
     DOM.resultMeta.textContent =
-      `Preset: ${preset} · Format: ${ext.toUpperCase()} · File: ${AppState.audioFile.name}`;
+      `Preset: ${preset} · Format: ${fmt} · Input: ${origMB}MB → Output: ~${estMB}MB`;
     DOM.resultPanel.style.display = 'block';
 
     // Add to history
@@ -490,11 +499,12 @@ DOM.btnProcess.addEventListener('click', async () => {
 // ── Download result ────────────────────────────────────────
 DOM.btnDownload.addEventListener('click', () => {
   if (!AppState.resultUrl) return;
-  const ext  = AppState.remixParams.format === 'mp3-320' ? 'mp3' : AppState.remixParams.format;
-  const base = AppState.audioFile ? AppState.audioFile.name.replace(/\.[^.]+$/, '') : 'remix';
+  // Randomized filename — strips metadata hint, helps avoid Roblox name-matching
+  const randomName = window.RemixerModule?.randomFilename() || ('arb_' + Math.random().toString(36).slice(2,8));
+  const ext  = window.lamejs ? 'mp3' : 'wav'; // MP3 if lamejs loaded, WAV fallback
   const a    = document.createElement('a');
   a.href     = AppState.resultUrl;
-  a.download = `${base}_remix_AudioRobloxBY.${ext}`;
+  a.download = `${randomName}.${ext}`;
   a.click();
   showToast('⬇ Mendownload...', 'success');
 });
