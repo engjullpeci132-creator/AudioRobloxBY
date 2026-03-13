@@ -425,12 +425,18 @@ DOM.btnProcess.addEventListener('click', async () => {
 
   try {
     showProgress(10, 'Membaca file audio...');
-    await sleep(300);
+    await sleep(200);
 
-    showProgress(30, 'Menerapkan preset & efek...');
-    await sleep(400);
+    showProgress(20, 'Ghost Mode — warping frequency axis...');
+    await sleep(200);
 
-    showProgress(55, 'Memproses pitch & tempo...');
+    showProgress(35, 'Pitch shift + spectral smear...');
+    await sleep(200);
+
+    showProgress(50, 'Stereo decorrelation + EQ...');
+    await sleep(200);
+
+    showProgress(65, 'OLA transient smear + sub-bass reshape...');
     // Inject current preset key so remixer picks the right bypass profile
     const paramsWithPreset = {
       ...AppState.remixParams,
@@ -445,8 +451,8 @@ DOM.btnProcess.addEventListener('click', async () => {
       resultBlob = AppState.audioFile;
     }
 
-    showProgress(80, 'Menerapkan reverb & noise...');
-    await sleep(400);
+    showProgress(80, 'Window misalignment + encoding MP3...');
+    await sleep(300);
 
     showProgress(95, 'Menyiapkan file output...');
     await sleep(300);
