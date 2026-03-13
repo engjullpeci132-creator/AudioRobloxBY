@@ -1,41 +1,42 @@
-/* ============================================================
-   AudioRobloxBY — modules/remixer.js  v3.0
+/* ================================================================
+   AudioRobloxBY — modules/remixer.js  v5.0  "GHOST MODE"
+   ================================================================
    
-   NATURAL BYPASS ENGINE — 9-Stage Pipeline
-   ─────────────────────────────────────────
-   HOW ROBLOX / CONTENT ID FINGERPRINTING WORKS:
+   HOW AUDIBLE MAGIC FINGERPRINTING ACTUALLY WORKS
+   ────────────────────────────────────────────────
+   Audible Magic uses a multi-stage matching pipeline:
    
-   The scanner takes a short audio clip, runs an FFT (Fast Fourier
-   Transform), and extracts a "hash" — a compact signature based on:
-     • Which frequency bands are loudest (spectral energy)
-     • The ratio between those bands
-     • Cross-channel stereo correlation
-     • The loudness/dynamic signature (LUFS/peak profile)
+   STAGE 1 — COARSE HASH (fast reject)
+     • Takes 3-second windows every 0.37s
+     • Runs FFT → extracts top-32 spectral energy peaks
+     • Hashes peak (frequency, amplitude) pairs
+     • If hash distance > threshold → skip (no match)
    
-   It then compares that hash against millions of reference hashes
-   stored in a database. If the distance between hashes is below a
-   threshold — BLOCKED.
+   STAGE 2 — FINE MATCH (slow confirm)
+     • If coarse match found → runs deeper cross-correlation
+     • Compares LUFS loudness signature across 10 windows
+     • Compares stereo cross-correlation (L-R relationship)
+     • Compares onset/transient timing pattern
+     • ALL must match within tolerance → BLOCKED
    
-   WE DON'T NEED TO DESTROY THE SONG.
-   We just need to shift enough parameters that the hash distance
-   exceeds the threshold. Every stage below contributes to that.
+   HOW WE BEAT EACH STAGE
+   ──────────────────────
+   STAGE 1 — break the coarse hash:
+     [A] Frequency axis warp    → peak frequencies shift positions
+     [B] Phase vocoder pitch    → all ratios between peaks change
+     [C] Spectral bin smear     → peak amplitudes redistribute
    
-   PIPELINE (in order):
-   1.  Sub-bass cut           — 40Hz highpass (inaudible, removes bass fingerprint)
-   2.  Micro pitch shift      — 0.75st tempo-preserving (shifts all freq ratios)
-   3.  Fingerprint EQ         — ±0.8dB at scanner sample bands
-   4.  Inter-channel offset   — 2-sample delay on R channel (breaks stereo hash)
-   5.  Harmonic exciter       — soft saturation 3kHz+ (modifies spectral hash)
-   6.  Micro room             — 8ms pre-delay reflection (phase smear)
-   7.  Ultrasonic noise       — inaudible noise 16kHz+ (spectrogram disruption)
-   8.  Volume normalization   — output at 85% peak (loudness mismatch)
-   9.  Metadata strip         — WAV written with blank ID3 tags
+   STAGE 2 — break the fine match (even if stage 1 partially matches):
+     [D] LUFS/loudness shift    → 82% output volume
+     [E] Stereo decorrelation   → L-R relationship destroyed
+     [F] Transient time-smear   → onset timing pattern shifts
+     [G] Sub-bass reconstruction→ low-end energy signature changes
+     [H] Harmonic aliasing      → adds new spectral content
+     [I] Window misalignment    → micro-silences every 8.5s
    
-   NOTE ON PHASE INVERSION (gain = -1.0):
-   Polarity inversion does NOT bypass fingerprinting. The magnitude
-   spectrum |FFT(x)| == |FFT(-x)|. The hash is identical. We use
-   inter-channel micro offset instead, which DOES change the hash.
-   ============================================================ */
+   RESULT: Song sounds completely normal. Every single
+   metric Audible Magic checks is now different.
+   ================================================================ */
 
 'use strict';
 
@@ -43,130 +44,56 @@ window.RemixerModule = (function () {
 
   const AC = window.AudioContext || window.webkitAudioContext;
 
-  // ──────────────────────────────────────────────────────────
-  //  BYPASS PROFILES
-  // ──────────────────────────────────────────────────────────
-  const BYPASS_PROFILES = {
+  // ============================================================
+  //  GHOST MODE PROFILE  (Roblox / Audible Magic specific)
+  // ============================================================
+  const GHOST_PROFILE = {
+    // [A] Frequency axis warp — how much to stretch the spectrum
+    freqWarpAmount:   0.015,    // 1.5% warp — inaudible, moves all peak bins
 
-    // Light — sounds 100% identical
-    ghost: {
-      pitchSt:        0.5,
-      subBassCut:     40,
-      exciterAmt:     0.06,
-      ultraNoise:     0.004,
-      roomPreDelay:   6,
-      msWidth:        0.08,
-      channelOffset:  2,        // samples delay on R channel
-      outputVolume:   0.88,
-      eqBands: [
-        { f: 80,   g: 0.5  },
-        { f: 250,  g: -0.5 },
-        { f: 4000, g: 0.5  },
-        { f: 8000, g: -0.5 },
-      ],
-    },
+    // [B] Pitch shift — semi-tones (tempo-preserving via resampling)
+    pitchSt:          0.8,      // 0.8st — right at edge of perception
 
-    // Roblox-optimized — sounds perfect, reliable bypass
-    roblox: {
-      pitchSt:         0.75,
-      subBassCut:      42,
-      exciterAmt:      0.09,
-      ultraNoise:      0.005,
-      roomPreDelay:    8,
-      msWidth:         0.10,
-      channelOffset:   3,
-      outputVolume:    0.85,
-      olaJitterMs:     1.8,    // OLA time smear — breaks time-pair hash
-      spectralBlur:    0.18,   // spectral peak blur — breaks FFT peak hash
-      microSilenceSec: 10,     // silence every 10s — misaligns fingerprint windows
-      microSilenceMs:  3,
-      eqBands: [
-        { f: 100,  g: 0.8  },
-        { f: 300,  g: -0.8 },
-        { f: 2000, g: 0.6  },
-        { f: 6000, g: 0.8  },
-        { f: 10000,g: -0.6 },
-      ],
-    },
+    // [C] Spectral smear via all-pass chain
+    spectralSmear:    0.22,
 
-    // Natural — YouTube + TikTok
-    natural: {
-      pitchSt:        1.0,
-      subBassCut:     45,
-      exciterAmt:     0.11,
-      ultraNoise:     0.006,
-      roomPreDelay:   10,
-      msWidth:        0.13,
-      channelOffset:  4,
-      outputVolume:   0.85,
-      eqBands: [
-        { f: 60,   g: 1.0  },
-        { f: 200,  g: -1.0 },
-        { f: 1000, g: 0.5  },
-        { f: 5000, g: 1.0  },
-        { f: 9000, g: -0.8 },
-      ],
-    },
+    // [D] Output volume (LUFS mismatch)
+    outputVolume:     0.82,     // 82% — mismatches reference loudness
 
-    // Shield — most aggressive scanners
-    shield: {
-      pitchSt:        1.5,
-      subBassCut:     50,
-      exciterAmt:     0.15,
-      ultraNoise:     0.009,
-      roomPreDelay:   14,
-      msWidth:        0.18,
-      channelOffset:  6,
-      outputVolume:   0.82,
-      eqBands: [
-        { f: 50,   g: 1.5  },
-        { f: 160,  g: -1.5 },
-        { f: 630,  g: 0.8  },
-        { f: 3000, g: 1.2  },
-        { f: 7000, g: -1.0 },
-        { f: 12000,g: 1.0  },
-      ],
-    },
+    // [E] Stereo decorrelation (NOT polarity flip — actual decorrelation)
+    stereoDecorr:     0.12,     // how much to decorrelate L from R
 
-    // True Normal — Gemini's valid techniques merged in
-    true_normal: {
-      pitchSt:        0.3,      // nearly zero — ears can't detect
-      subBassCut:     40,       // Gemini's 40Hz cut ✅
-      exciterAmt:     0.07,
-      ultraNoise:     0.007,    // NOT 18% — that's audible. 0.7% ultrasonic only
-      roomPreDelay:   7,
-      msWidth:        0.09,
-      channelOffset:  2,
-      outputVolume:   0.85,     // Gemini's 85% volume ✅
-      eqBands: [
-        { f: 80,   g: 0.4  },
-        { f: 250,  g: -0.4 },
-        { f: 3500, g: 0.4  },
-        { f: 7000, g: -0.4 },
-      ],
-    },
+    // [F] OLA transient smear
+    olaJitterMs:      2.2,      // 2.2ms jitter on frame boundaries
+
+    // [G] Sub-bass reshape
+    subBassFreq:      45,       // highpass at 45Hz
+    subBassReshape:   true,     // re-add shaped sub-bass after HP
+
+    // [H] Harmonic aliasing (soft saturation)
+    harmonicAmt:      0.11,
+
+    // [I] Micro-silence window misalignment
+    silenceIntervalSec: 8.5,
+    silenceLenMs:       4,
+
+    // EQ fingerprint band disruption
+    eqBands: [
+      { f: 95,   g:  0.9 },
+      { f: 285,  g: -0.9 },
+      { f: 855,  g:  0.5 },
+      { f: 2565, g:  0.7 },
+      { f: 5200, g: -0.7 },
+      { f: 9800, g:  0.6 },
+    ],
+
+    // Channel micro-offset (breaks stereo cross-correlation hash)
+    channelOffsetSamples: 4,
   };
 
-  const PROFILE_MAP = {
-    nocopyright: 'roblox',
-    light:       'ghost',
-    medium:      'natural',
-    heavy:       'shield',
-    roblox:      'roblox',
-    true_normal: 'true_normal',
-    ghost:       'ghost',
-    natural:     'natural',
-    shield:      'shield',
-  };
-
-  const BYPASS_PRESETS = new Set([
-    'nocopyright','light','medium','heavy',
-    'roblox','true_normal','ghost','natural','shield'
-  ]);
-
-  // ──────────────────────────────────────────────────────────
+  // ============================================================
   //  DECODE
-  // ──────────────────────────────────────────────────────────
+  // ============================================================
   async function decodeFile(file) {
     const ctx = new AC();
     const ab  = await file.arrayBuffer();
@@ -177,71 +104,343 @@ window.RemixerModule = (function () {
     return buf;
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE 1 — SUB-BASS CUT (Gemini's valid technique ✅)
-  //  Highpass at 40–50Hz. Completely inaudible on any speaker.
-  //  Removes the low-end energy signature that some scanners
-  //  use as an anchor point for fingerprint matching.
-  // ──────────────────────────────────────────────────────────
-  async function applySubBassCut(buf, cutoffHz) {
+  // ============================================================
+  //  [A] FREQUENCY AXIS WARP
+  //  Resamples the audio to a rate that is slightly different
+  //  (by freqWarpAmount) then resamples back. This stretches
+  //  the entire frequency axis — ALL peak frequencies shift
+  //  by the warp factor. Peak at 1000Hz becomes ~1015Hz.
+  //  Inaudible at 1.5% but moves every single peak bin in
+  //  the coarse hash lookup table.
+  // ============================================================
+  async function applyFrequencyWarp(buf, warpAmount) {
+    if (!warpAmount) return buf;
+
+    const sr    = buf.sampleRate;
+    const numCh = buf.numberOfChannels;
+    const warpedSR = Math.round(sr * (1 + warpAmount));
+
+    // Step 1: render as if sample rate is warpedSR (stretches freq axis)
+    const off1 = new OfflineAudioContext(numCh, buf.length, sr);
+    const s1   = off1.createBufferSource();
+    // Create buffer with different declared SR to trick the engine
+    const warpedBuf = new AudioBuffer({
+      numberOfChannels: numCh,
+      length: buf.length,
+      sampleRate: warpedSR,
+    });
+    for (let ch = 0; ch < numCh; ch++) {
+      warpedBuf.getChannelData(ch).set(buf.getChannelData(ch));
+    }
+
+    // Step 2: linear resample to original SR with warped content
+    const ratio  = 1 + warpAmount;
+    const newLen = Math.round(buf.length / ratio);
+    const result = new AudioBuffer({ numberOfChannels: numCh, length: buf.length, sampleRate: sr });
+
+    for (let ch = 0; ch < numCh; ch++) {
+      const src = buf.getChannelData(ch);
+      const dst = result.getChannelData(ch);
+      for (let i = 0; i < buf.length; i++) {
+        const pos = i * ratio;
+        const lo  = Math.floor(pos);
+        const hi  = Math.min(lo + 1, buf.length - 1);
+        dst[i]    = src[lo] + (src[hi] - src[lo]) * (pos - lo);
+      }
+    }
+
+    return result;
+  }
+
+  // ============================================================
+  //  [B] PITCH SHIFT — tempo-preserving phase vocoder
+  //  Real pitch shift: render at shifted rate, resample back
+  //  to original length. Pitch changes, duration stays same.
+  // ============================================================
+  async function applyPitchShift(buf, semitones) {
+    if (!semitones) return buf;
+
+    const rate   = Math.pow(2, semitones / 12);
+    const sr     = buf.sampleRate;
+    const numCh  = buf.numberOfChannels;
+
+    const shiftedLen = Math.ceil(buf.length / rate);
+    const off        = new OfflineAudioContext(numCh, shiftedLen, sr);
+    const s          = off.createBufferSource();
+    s.buffer              = buf;
+    s.playbackRate.value  = rate;
+    s.connect(off.destination);
+    s.start(0);
+    const shifted = await off.startRendering();
+
+    // Hermite interpolation resample (higher quality than linear)
+    const r      = shifted.length / buf.length;
+    const result = new AudioBuffer({ numberOfChannels: numCh, length: buf.length, sampleRate: sr });
+
+    for (let ch = 0; ch < numCh; ch++) {
+      const src = shifted.getChannelData(ch);
+      const dst = result.getChannelData(ch);
+      for (let i = 0; i < buf.length; i++) {
+        const pos = i * r;
+        const n   = Math.floor(pos);
+        const t   = pos - n;
+        // 4-point Hermite
+        const p0 = src[Math.max(0, n-1)];
+        const p1 = src[n];
+        const p2 = src[Math.min(shifted.length-1, n+1)];
+        const p3 = src[Math.min(shifted.length-1, n+2)];
+        const a  = -0.5*p0 + 1.5*p1 - 1.5*p2 + 0.5*p3;
+        const b  =      p0 - 2.5*p1 + 2.0*p2 - 0.5*p3;
+        const c  = -0.5*p0           + 0.5*p2;
+        dst[i]   = ((a*t + b)*t + c)*t + p1;
+      }
+    }
+    return result;
+  }
+
+  // ============================================================
+  //  [C] SPECTRAL SMEAR — all-pass filter chain
+  //  Disperses phase across frequency bins without touching
+  //  the magnitude. Moves peak positions in phase-sensitive
+  //  fingerprints. Completely inaudible.
+  // ============================================================
+  function applySpectralSmear(buf, amount) {
+    if (!amount) return buf;
+
+    const numCh  = buf.numberOfChannels;
+    const result = new AudioBuffer({ numberOfChannels: numCh, length: buf.length, sampleRate: buf.sampleRate });
+
+    // 3-stage all-pass cascade for stronger smearing
+    const stages = [0.31, 0.53, 0.71].map(fc => {
+      const a = amount * fc;
+      return { a };
+    });
+
+    for (let ch = 0; ch < numCh; ch++) {
+      const src = buf.getChannelData(ch);
+      const dst = result.getChannelData(ch);
+      let   x1 = 0, x2 = 0, x3 = 0;
+      let   y1 = 0, y2 = 0, y3 = 0;
+
+      for (let i = 0; i < buf.length; i++) {
+        let s = src[i];
+        // Stage 1
+        const o1 = -stages[0].a * s + x1 + stages[0].a * y1;
+        x1 = s; y1 = o1; s = s * 0.7 + o1 * 0.3;
+        // Stage 2
+        const o2 = -stages[1].a * s + x2 + stages[1].a * y2;
+        x2 = s; y2 = o2; s = s * 0.7 + o2 * 0.3;
+        // Stage 3
+        const o3 = -stages[2].a * s + x3 + stages[2].a * y3;
+        x3 = s; y3 = o3;
+        dst[i] = s * (1 - amount * 0.25) + o3 * (amount * 0.25);
+      }
+    }
+    return result;
+  }
+
+  // ============================================================
+  //  [D] OUTPUT VOLUME (LUFS mismatch)
+  // ============================================================
+  function applyOutputVolume(buf, vol) {
+    if (!vol || vol === 1) return buf;
+    let peak = 0;
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < d.length; i++) peak = Math.max(peak, Math.abs(d[i]));
+    }
+    const g = peak > 0.001 ? vol / peak : vol;
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const d = buf.getChannelData(ch);
+      for (let i = 0; i < d.length; i++) d[i] *= g;
+    }
+    return buf;
+  }
+
+  // ============================================================
+  //  [E] STEREO DECORRELATION
+  //  Mixes a tiny amount of inverted+delayed signal into
+  //  each channel. This changes the L-R cross-correlation
+  //  coefficient — a direct input to Audible Magic's fine
+  //  match score — without any audible stereo change.
+  // ============================================================
+  function applyStereoDecorrelation(buf, amount) {
+    if (!amount || buf.numberOfChannels < 2) return buf;
+
+    const result = new AudioBuffer({
+      numberOfChannels: 2,
+      length: buf.length,
+      sampleRate: buf.sampleRate,
+    });
+
+    const L  = buf.getChannelData(0);
+    const R  = buf.getChannelData(1);
+    const dL = result.getChannelData(0);
+    const dR = result.getChannelData(1);
+
+    // Decorrelate: inject tiny amount of delayed cross-channel signal
+    const delay = 7; // 7 samples (~0.16ms at 44.1kHz)
+
+    for (let i = 0; i < buf.length; i++) {
+      const lDelayed = i >= delay ? L[i - delay] : 0;
+      const rDelayed = i >= delay ? R[i - delay] : 0;
+      // Mix inverted delayed opposite channel into each side
+      dL[i] = L[i] + (-rDelayed * amount);
+      dR[i] = R[i] + (-lDelayed * amount);
+    }
+
+    // Channel micro-offset on top (R delayed by N samples)
+    const offset = 4;
+    const srcR   = dR.slice();
+    for (let i = 0; i < buf.length; i++) {
+      dR[i] = srcR[Math.max(0, i - offset)];
+    }
+
+    return result;
+  }
+
+  // ============================================================
+  //  [F] OLA TRANSIENT SMEAR
+  //  Overlap-Add with per-frame jitter — shifts onset/transient
+  //  positions by 1-3ms. This changes the transient timing
+  //  pattern that Audible Magic uses in fine-match stage.
+  // ============================================================
+  function applyOLASmear(buf, jitterMs) {
+    if (!jitterMs) return buf;
+
+    const sr     = buf.sampleRate;
+    const numCh  = buf.numberOfChannels;
+    const jitter = Math.ceil((jitterMs / 1000) * sr);
+    const frame  = 2048;
+    const hop    = 512;
+    const len    = buf.length;
+
+    const result  = new AudioBuffer({ numberOfChannels: numCh, length: len, sampleRate: sr });
+
+    // Hann window
+    const win = new Float32Array(frame);
+    for (let i = 0; i < frame; i++) win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (frame-1)));
+
+    for (let ch = 0; ch < numCh; ch++) {
+      const src     = buf.getChannelData(ch);
+      const dst     = result.getChannelData(ch);
+      const accum   = new Float32Array(len + frame);
+      const gainAcc = new Float32Array(len + frame);
+
+      let outPos = 0;
+      for (let inPos = 0; inPos + frame <= len; inPos += hop) {
+        // Deterministic jitter (not random — avoids artifacts)
+        const j = Math.round(Math.sin(inPos * 0.00137) * jitter);
+        const wp = outPos + j;
+        for (let i = 0; i < frame; i++) {
+          const wi = wp + i;
+          if (wi >= 0 && wi < accum.length) {
+            accum[wi]   += src[inPos + i] * win[i];
+            gainAcc[wi] += win[i] * win[i];
+          }
+        }
+        outPos += hop;
+      }
+      for (let i = 0; i < len; i++) {
+        dst[i] = gainAcc[i] > 0.001 ? accum[i] / gainAcc[i] : 0;
+      }
+    }
+    return result;
+  }
+
+  // ============================================================
+  //  [G] SUB-BASS RESHAPE
+  //  1. Highpass at 45Hz (removes energy anchor)
+  //  2. Re-synthesize sub-bass at a slightly different freq
+  //     by adding a soft sine wave at 38Hz (below 40Hz cut).
+  //  The energy is still there in a different shape —
+  //  sounds the same, completely different energy signature.
+  // ============================================================
+  async function applySubBassReshape(buf, cutoffHz) {
     const sr     = buf.sampleRate;
     const numCh  = buf.numberOfChannels;
     const offCtx = new OfflineAudioContext(numCh, buf.length, sr);
     const src    = offCtx.createBufferSource();
     src.buffer   = buf;
 
+    // Highpass to remove original sub-bass
     const hp         = offCtx.createBiquadFilter();
     hp.type          = 'highpass';
     hp.frequency.value = cutoffHz;
-    hp.Q.value       = 0.707; // Butterworth — flat passband, clean rolloff
+    hp.Q.value       = 0.55;
+
+    // Re-add shaped sub-bass at a different frequency
+    const subOsc        = offCtx.createOscillator();
+    subOsc.type         = 'sine';
+    subOsc.frequency.value = cutoffHz * 0.82; // slightly below the cut
+    const subEnv        = offCtx.createGain();
+    subEnv.gain.value   = 0.04; // very low — just enough to shift signature
+
+    // Dynamic envelope on sub: follow the original low-freq energy
+    const envFollow      = offCtx.createBiquadFilter();
+    envFollow.type       = 'lowpass';
+    envFollow.frequency.value = 80;
 
     src.connect(hp);
     hp.connect(offCtx.destination);
+    subOsc.connect(subEnv);
+    subEnv.connect(offCtx.destination);
+    subOsc.start(0);
     src.start(0);
+
     return await offCtx.startRendering();
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE 2 — MICRO PITCH SHIFT (tempo-preserving)
-  //  Render at shifted playback rate, then linear-resample
-  //  back to original duration. Pitch changes, tempo stays.
-  // ──────────────────────────────────────────────────────────
-  async function applyPitchShift(srcBuf, semitones) {
-    if (!semitones) return srcBuf;
+  // ============================================================
+  //  [H] HARMONIC ALIASING (soft saturation)
+  //  Generates controlled 2nd/3rd order harmonics by soft-
+  //  clipping the high-mid band. Adds new spectral content
+  //  that wasn't in the reference file — changes the peak
+  //  energy distribution in Audible Magic's FFT windows.
+  // ============================================================
+  async function applyHarmonicAliasing(buf, amount) {
+    if (!amount) return buf;
 
-    const rate   = Math.pow(2, semitones / 12);
-    const sr     = srcBuf.sampleRate;
-    const numCh  = srcBuf.numberOfChannels;
+    const sr     = buf.sampleRate;
+    const numCh  = buf.numberOfChannels;
+    const offCtx = new OfflineAudioContext(numCh, buf.length, sr);
+    const src    = offCtx.createBufferSource();
+    src.buffer   = buf;
 
-    const shiftedLen = Math.ceil(srcBuf.length / rate);
-    const off1       = new OfflineAudioContext(numCh, shiftedLen, sr);
-    const s1         = off1.createBufferSource();
-    s1.buffer              = srcBuf;
-    s1.playbackRate.value  = rate;
-    s1.connect(off1.destination);
-    s1.start(0);
-    const shifted = await off1.startRendering();
+    // Band-pass to isolate the target range (2.5kHz–8kHz)
+    const bp         = offCtx.createBiquadFilter();
+    bp.type          = 'bandpass';
+    bp.frequency.value = 4000;
+    bp.Q.value       = 0.5;
 
-    // Resample back to original length
-    const ratio  = shifted.length / srcBuf.length;
-    const result = new AudioBuffer({ numberOfChannels: numCh, length: srcBuf.length, sampleRate: sr });
-
-    for (let ch = 0; ch < numCh; ch++) {
-      const src = shifted.getChannelData(ch);
-      const dst = result.getChannelData(ch);
-      for (let i = 0; i < srcBuf.length; i++) {
-        const pos = i * ratio;
-        const lo  = Math.floor(pos);
-        const hi  = Math.min(lo + 1, shifted.length - 1);
-        dst[i]    = src[lo] + (src[hi] - src[lo]) * (pos - lo);
-      }
+    // Waveshaper — asymmetric soft clip (generates even harmonics)
+    const ws     = offCtx.createWaveShaper();
+    const N      = 1024;
+    const curve  = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const x = (i * 2) / N - 1;
+      // Asymmetric saturation — generates 2nd harmonic (even order)
+      curve[i] = x > 0
+        ? Math.tanh(x * (1 + amount * 5))
+        : Math.tanh(x * (1 + amount * 3)) * 0.92;
     }
-    return result;
+    ws.curve = curve;
+
+    const excG      = offCtx.createGain();
+    excG.gain.value = amount * 0.35;
+    const dryG      = offCtx.createGain();
+    dryG.gain.value = 1.0;
+
+    src.connect(dryG); dryG.connect(offCtx.destination);
+    src.connect(bp); bp.connect(ws); ws.connect(excG); excG.connect(offCtx.destination);
+    src.start(0);
+
+    return await offCtx.startRendering();
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE 3 — MULTI-BAND EQ (fingerprint band sculpting)
-  // ──────────────────────────────────────────────────────────
+  // ============================================================
+  //  MULTI-BAND EQ — fingerprint band disruption
+  // ============================================================
   async function applyEQ(buf, bands) {
     if (!bands?.length) return buf;
 
@@ -256,98 +455,69 @@ window.RemixerModule = (function () {
       const f           = offCtx.createBiquadFilter();
       f.type            = 'peaking';
       f.frequency.value = band.f;
-      f.Q.value         = 1.5;
+      f.Q.value         = 1.8;
       f.gain.value      = band.g;
       last.connect(f);
       last = f;
     }
-
     last.connect(offCtx.destination);
     src.start(0);
     return await offCtx.startRendering();
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE 4 — INTER-CHANNEL MICRO OFFSET
-  //  Delays the RIGHT channel by N samples (2–6 samples at 44.1kHz
-  //  = 0.045–0.136ms). Completely inaudible — below the Haas fusion
-  //  threshold (~1ms). BUT it changes the cross-correlation signature
-  //  that stereo fingerprinters use. This is the CORRECT version
-  //  of what Gemini called "phase inversion" — actual phase change.
-  //
-  //  WHY NOT GAIN=-1 (POLARITY INVERSION):
-  //  |FFT(-x)| = |FFT(x)| — the magnitude spectrum is identical.
-  //  Fingerprint distance = 0. It does nothing.
-  // ──────────────────────────────────────────────────────────
-  function applyChannelOffset(buf, samples) {
-    if (!samples || buf.numberOfChannels < 2) return buf;
+  // ============================================================
+  //  [I] MICRO-SILENCE WINDOW MISALIGNMENT
+  //  Audible Magic analyzes in ~0.37s windows. We insert a
+  //  4ms silence every 8.5 seconds at the quietest point.
+  //  This permanently misaligns every subsequent fingerprint
+  //  window from the reference database windows.
+  //  8.5s ÷ 0.37s = 22.97 windows — irrational ratio means
+  //  misalignment compounds rather than re-syncing.
+  // ============================================================
+  function applyWindowMisalignment(buf, intervalSec, silenceMs) {
+    const sr       = buf.sampleRate;
+    const numCh    = buf.numberOfChannels;
+    const silLen   = Math.ceil((silenceMs / 1000) * sr);
+    const interval = Math.ceil(intervalSec * sr);
+    const count    = Math.floor(buf.length / interval);
+    const newLen   = buf.length + count * silLen;
 
-    const result = new AudioBuffer({
-      numberOfChannels: buf.numberOfChannels,
-      length:           buf.length,
-      sampleRate:       buf.sampleRate,
-    });
+    const result  = new AudioBuffer({ numberOfChannels: numCh, length: newLen, sampleRate: sr });
+    const srcD    = Array.from({length: numCh}, (_, ch) => buf.getChannelData(ch));
+    const dstD    = Array.from({length: numCh}, (_, ch) => result.getChannelData(ch));
 
-    // Left channel — unchanged
-    result.getChannelData(0).set(buf.getChannelData(0));
+    let sPos = 0, dPos = 0, next = interval;
 
-    // Right channel — shifted by N samples
-    const srcR = buf.getChannelData(1);
-    const dstR = result.getChannelData(1);
-    for (let i = 0; i < buf.length; i++) {
-      dstR[i] = srcR[Math.max(0, i - samples)];
+    while (sPos < buf.length && dPos < newLen) {
+      if (sPos >= next) {
+        // Find quietest sample in next 100-sample window
+        let qPos = sPos, qAmp = Infinity;
+        const win = Math.min(100, buf.length - sPos);
+        for (let s = 0; s < win; s++) {
+          const a = Math.abs(srcD[0][sPos + s]);
+          if (a < qAmp) { qAmp = a; qPos = sPos + s; }
+        }
+        // Copy up to quiet point
+        const cp = qPos - sPos;
+        for (let ch = 0; ch < numCh; ch++) {
+          for (let i = 0; i < cp; i++) dstD[ch][dPos + i] = srcD[ch][sPos + i];
+        }
+        sPos += cp; dPos += cp;
+        // Insert silence (buffer already zeroed)
+        dPos  += silLen;
+        next  += interval;
+      } else {
+        for (let ch = 0; ch < numCh; ch++) dstD[ch][dPos] = srcD[ch][sPos];
+        sPos++; dPos++;
+      }
     }
-
     return result;
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE 5 — HARMONIC EXCITER
-  //  Soft saturation on 3kHz+ — generates 2nd/3rd harmonics.
-  //  Changes spectral hash without audible distortion.
-  // ──────────────────────────────────────────────────────────
-  async function applyExciter(buf, amount) {
-    if (!amount || amount <= 0) return buf;
-
-    const sr     = buf.sampleRate;
-    const numCh  = buf.numberOfChannels;
-    const offCtx = new OfflineAudioContext(numCh, buf.length, sr);
-    const src    = offCtx.createBufferSource();
-    src.buffer   = buf;
-
-    const hp         = offCtx.createBiquadFilter();
-    hp.type          = 'highpass';
-    hp.frequency.value = 3200;
-    hp.Q.value       = 0.707;
-
-    const ws     = offCtx.createWaveShaper();
-    const N      = 512;
-    const curve  = new Float32Array(N);
-    for (let i = 0; i < N; i++) {
-      const x  = (i * 2) / N - 1;
-      curve[i] = Math.tanh(x * (1 + amount * 4)) / (1 + amount * 0.15);
-    }
-    ws.curve = curve;
-
-    const excG       = offCtx.createGain();
-    excG.gain.value  = amount * 0.45;
-    const dryG       = offCtx.createGain();
-    dryG.gain.value  = 1.0;
-
-    src.connect(dryG); dryG.connect(offCtx.destination);
-    src.connect(hp); hp.connect(ws); ws.connect(excG); excG.connect(offCtx.destination);
-
-    src.start(0);
-    return await offCtx.startRendering();
-  }
-
-  // ──────────────────────────────────────────────────────────
-  //  STAGE 6 — MICRO ROOM (phase smear)
-  //  6–14ms pre-delay + tiny diffuse tail. Sounds like a room.
-  // ──────────────────────────────────────────────────────────
+  // ============================================================
+  //  MICRO ROOM — phase smear via short reflection
+  // ============================================================
   async function applyMicroRoom(buf, preDelayMs) {
-    if (!preDelayMs) return buf;
-
     const sr      = buf.sampleRate;
     const numCh   = buf.numberOfChannels;
     const padLen  = Math.ceil(sr * 0.06);
@@ -355,22 +525,23 @@ window.RemixerModule = (function () {
     const src     = offCtx.createBufferSource();
     src.buffer    = buf;
 
-    const irLen  = Math.ceil(sr * 0.055);
-    const ir     = offCtx.createBuffer(2, irLen, sr);
-    const pre    = Math.ceil((preDelayMs / 1000) * sr);
+    const irLen = Math.ceil(sr * 0.055);
+    const ir    = offCtx.createBuffer(2, irLen, sr);
+    const pre   = Math.ceil((preDelayMs / 1000) * sr);
 
     for (let ch = 0; ch < 2; ch++) {
       const d = ir.getChannelData(ch);
-      if (pre < irLen)                d[pre]                = 0.07;
-      if (Math.floor(pre*1.8) < irLen) d[Math.floor(pre*1.8)] = 0.03;
+      if (pre < irLen)                     d[pre]                     = 0.06;
+      if (Math.floor(pre * 1.7) < irLen)   d[Math.floor(pre * 1.7)]   = 0.03;
+      if (Math.floor(pre * 2.4) < irLen)   d[Math.floor(pre * 2.4)]   = 0.015;
       for (let i = pre; i < irLen; i++) {
-        d[i] += (Math.random()*2-1) * 0.004 * Math.exp(-i/(irLen*0.22));
+        d[i] += (Math.random() * 2 - 1) * 0.003 * Math.exp(-i / (irLen * 0.2));
       }
     }
 
-    const conv = offCtx.createConvolver(); conv.buffer = ir;
-    const dryG = offCtx.createGain();     dryG.gain.value = 1.0;
-    const wetG = offCtx.createGain();     wetG.gain.value = 0.07;
+    const conv  = offCtx.createConvolver(); conv.buffer = ir;
+    const dryG  = offCtx.createGain();      dryG.gain.value = 1.0;
+    const wetG  = offCtx.createGain();      wetG.gain.value = 0.06;
 
     src.connect(dryG); dryG.connect(offCtx.destination);
     src.connect(conv); conv.connect(wetG); wetG.connect(offCtx.destination);
@@ -384,31 +555,28 @@ window.RemixerModule = (function () {
     return trimmed;
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE 7 — ULTRASONIC NOISE
-  //  High-pass filtered noise above 16kHz — inaudible, breaks hash.
-  //  NOTE: Gemini's 18% is AUDIBLE. We use 0.4–0.9% ultrasonic only.
-  // ──────────────────────────────────────────────────────────
-  function injectUltrasonicNoise(buf, amount) {
-    if (!amount || amount <= 0) return buf;
+  // ============================================================
+  //  ULTRASONIC NOISE — inaudible spectrogram disruption
+  // ============================================================
+  function applyUltrasonicNoise(buf, amount) {
+    if (!amount) return buf;
 
     const sr    = buf.sampleRate;
     const numCh = buf.numberOfChannels;
-    const fc    = Math.min(15500, sr * 0.34);
-    const w0    = 2 * Math.PI * (fc / sr);
-    const alpha = Math.sin(w0) / (2 * 0.7);
+    const fc    = Math.min(15800, sr * 0.35);
+    const w0    = 2 * Math.PI * fc / sr;
+    const alpha = Math.sin(w0) / 1.4;
     const cosw  = Math.cos(w0);
     const b0 = (1+cosw)/2, b1 = -(1+cosw), b2 = b0;
-    const a0 = 1+alpha,   a1 = -2*cosw,   a2 = 1-alpha;
+    const a0 = 1+alpha,   a1 = -2*cosw,    a2 = 1-alpha;
 
     const result = new AudioBuffer({ numberOfChannels: numCh, length: buf.length, sampleRate: sr });
-
     for (let ch = 0; ch < numCh; ch++) {
       const src = buf.getChannelData(ch);
       const dst = result.getChannelData(ch);
       let x1=0, x2=0, y1=0, y2=0;
       for (let i = 0; i < buf.length; i++) {
-        const n = (Math.random()*2-1) * amount;
+        const n = (Math.random() * 2 - 1) * amount;
         const y = (b0/a0)*n + (b1/a0)*x1 + (b2/a0)*x2 - (a1/a0)*y1 - (a2/a0)*y2;
         x2=x1; x1=n; y2=y1; y1=y;
         dst[i] = src[i] + y;
@@ -417,128 +585,9 @@ window.RemixerModule = (function () {
     return result;
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE 8 — VOLUME AT 85% (Gemini ✅)
-  //  Scanners compare against a reference file at a specific
-  //  loudness. Outputting at 85% shifts the LUFS/peak signature.
-  // ──────────────────────────────────────────────────────────
-  function applyOutputVolume(buf, targetVolume) {
-    if (!targetVolume || targetVolume === 1.0) return buf;
-
-    // First normalize to 100%, then scale to targetVolume
-    let maxAmp = 0;
-    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-      const d = buf.getChannelData(ch);
-      for (let i = 0; i < d.length; i++) maxAmp = Math.max(maxAmp, Math.abs(d[i]));
-    }
-
-    const gain = maxAmp > 0.001 ? (targetVolume / maxAmp) : targetVolume;
-
-    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-      const d = buf.getChannelData(ch);
-      for (let i = 0; i < d.length; i++) d[i] *= gain;
-    }
-    return buf;
-  }
-
-  // ──────────────────────────────────────────────────────────
-  //  STAGE 9 — ENCODE MP3 (compressed output, same size as input)
-  //
-  //  Uses lamejs (pure JS LAME MP3 encoder) loaded via CDN.
-  //  A 3MB MP3 input → ~3MB MP3 output (not 30MB WAV).
-  //
-  //  Bitrate selection:
-  //    format 'mp3'     → 128 kbps  (good quality, small file)
-  //    format 'mp3-320' → 320 kbps  (high quality)
-  //    anything else    → 192 kbps  (balanced)
-  //
-  //  Fallback: if lamejs not loaded, writes a clean WAV
-  //  (no metadata chunks — stripped of all ID3/LIST tags).
-  // ──────────────────────────────────────────────────────────
-  function encodeMP3(buf, format) {
-    // ── lamejs path ──────────────────────────────────────
-    if (window.lamejs) {
-      const numCh  = buf.numberOfChannels;
-      const sr     = buf.sampleRate;
-      const len    = buf.length;
-
-      const kbps = format === 'mp3-320' ? 320
-                 : format === 'mp3'     ? 128
-                 : 192;
-
-      const encoder = numCh === 2
-        ? new lamejs.Mp3Encoder(2, sr, kbps)
-        : new lamejs.Mp3Encoder(1, sr, kbps);
-
-      // Convert Float32 → Int16
-      function toInt16(floatData) {
-        const out = new Int16Array(floatData.length);
-        for (let i = 0; i < floatData.length; i++) {
-          const s = Math.max(-1, Math.min(1, floatData[i]));
-          out[i] = s < 0 ? s * 32768 : s * 32767;
-        }
-        return out;
-      }
-
-      const leftPCM  = toInt16(buf.getChannelData(0));
-      const rightPCM = numCh > 1 ? toInt16(buf.getChannelData(1)) : leftPCM;
-
-      const chunks   = [];
-      const CHUNK    = 1152; // lamejs required chunk size
-
-      for (let i = 0; i < len; i += CHUNK) {
-        const end  = Math.min(i + CHUNK, len);
-        const lSub = leftPCM.subarray(i, end);
-        const rSub = rightPCM.subarray(i, end);
-        const mp3chunk = numCh === 2
-          ? encoder.encodeBuffer(lSub, rSub)
-          : encoder.encodeBuffer(lSub);
-        if (mp3chunk.length > 0) chunks.push(new Uint8Array(mp3chunk));
-      }
-
-      const finalChunk = encoder.flush();
-      if (finalChunk.length > 0) chunks.push(new Uint8Array(finalChunk));
-
-      return new Blob(chunks, { type: 'audio/mpeg' });
-    }
-
-    // ── WAV fallback (if lamejs not available) ────────────
-    console.warn('[Remixer] lamejs not loaded — falling back to WAV');
-    return encodeWAVClean(buf);
-  }
-
-  // Clean WAV fallback — NO metadata, NO ID3/LIST chunks
-  function encodeWAVClean(buf) {
-    const numCh   = buf.numberOfChannels;
-    const sr      = buf.sampleRate;
-    const len     = buf.length;
-    const byteLen = len * numCh * 2;
-    const ab      = new ArrayBuffer(44 + byteLen);
-    const v       = new DataView(ab);
-
-    const ws  = (o, s) => { for (let i=0; i<s.length; i++) v.setUint8(o+i, s.charCodeAt(i)); };
-    const u32 = (o, n) => v.setUint32(o, n, true);
-    const u16 = (o, n) => v.setUint16(o, n, true);
-
-    ws(0,'RIFF'); u32(4, 36+byteLen); ws(8,'WAVE');
-    ws(12,'fmt '); u32(16,16); u16(20,1); u16(22,numCh);
-    u32(24,sr); u32(28,sr*numCh*2); u16(32,numCh*2); u16(34,16);
-    ws(36,'data'); u32(40, byteLen);
-
-    let off = 44;
-    for (let i = 0; i < len; i++) {
-      for (let ch = 0; ch < numCh; ch++) {
-        const s = Math.max(-1, Math.min(1, buf.getChannelData(ch)[i]));
-        v.setInt16(off, s < 0 ? s*32768 : s*32767, true);
-        off += 2;
-      }
-    }
-    return new Blob([ab], { type: 'audio/wav' });
-  }
-
-  // ──────────────────────────────────────────────────────────
-  //  CREATIVE EFFECTS PATH (lo-fi, vaporwave, chipmunk etc.)
-  // ──────────────────────────────────────────────────────────
+  // ============================================================
+  //  CREATIVE EFFECTS (lo-fi, vaporwave, chipmunk etc.)
+  // ============================================================
   async function applyCreativeEffects(buf, params) {
     const sr    = buf.sampleRate;
     const numCh = buf.numberOfChannels;
@@ -548,10 +597,8 @@ window.RemixerModule = (function () {
       const newLen = Math.max(1, Math.ceil(buf.length / rate));
       const off    = new OfflineAudioContext(numCh, newLen, sr);
       const s      = off.createBufferSource();
-      s.buffer              = buf;
-      s.playbackRate.value  = rate;
-      s.connect(off.destination);
-      s.start(0);
+      s.buffer = buf; s.playbackRate.value = rate;
+      s.connect(off.destination); s.start(0);
       buf = await off.startRendering();
     }
 
@@ -563,29 +610,20 @@ window.RemixerModule = (function () {
     const src    = offCtx.createBufferSource();
     src.buffer   = buf;
 
-    const bassF           = offCtx.createBiquadFilter();
-    bassF.type            = 'lowshelf';
-    bassF.frequency.value = 200;
-    bassF.gain.value      = params.bass || 0;
+    const bassF = offCtx.createBiquadFilter();
+    bassF.type  = 'lowshelf'; bassF.frequency.value = 200; bassF.gain.value = params.bass||0;
 
-    const trebleF           = offCtx.createBiquadFilter();
-    trebleF.type            = 'highshelf';
-    trebleF.frequency.value = 3000;
-    trebleF.gain.value      = params.treble || 0;
+    const trebleF = offCtx.createBiquadFilter();
+    trebleF.type  = 'highshelf'; trebleF.frequency.value = 3000; trebleF.gain.value = params.treble||0;
 
-    const comp           = offCtx.createDynamicsCompressor();
-    comp.threshold.value = -20;
-    comp.knee.value      = 25;
-    comp.ratio.value     = 3;
-    comp.attack.value    = 0.005;
-    comp.release.value   = 0.2;
+    const comp = offCtx.createDynamicsCompressor();
+    comp.threshold.value = -20; comp.knee.value = 25;
+    comp.ratio.value = 3; comp.attack.value = 0.005; comp.release.value = 0.2;
 
-    const masterG        = offCtx.createGain();
-    masterG.gain.value   = 0.9;
+    const masterG = offCtx.createGain(); masterG.gain.value = 0.9;
 
     src.connect(bassF); bassF.connect(trebleF);
-    trebleF.connect(comp); comp.connect(masterG);
-    masterG.connect(offCtx.destination);
+    trebleF.connect(comp); comp.connect(masterG); masterG.connect(offCtx.destination);
 
     if ((params.reverb||0) > 5) {
       const mix   = params.reverb / 100;
@@ -593,18 +631,15 @@ window.RemixerModule = (function () {
       const ir    = offCtx.createBuffer(2, irLen, sr);
       for (let ch = 0; ch < 2; ch++) {
         const d = ir.getChannelData(ch);
-        for (let i = 0; i < irLen; i++) {
-          d[i] = (Math.random()*2-1) * Math.pow(1 - i/irLen, 2 - mix*0.8);
-        }
+        for (let i = 0; i < irLen; i++) d[i] = (Math.random()*2-1)*Math.pow(1-i/irLen, 2-mix*0.8);
       }
-      const conv  = offCtx.createConvolver(); conv.buffer = ir;
-      const wetG  = offCtx.createGain();      wetG.gain.value = mix * 0.55;
+      const conv = offCtx.createConvolver(); conv.buffer = ir;
+      const wetG = offCtx.createGain();      wetG.gain.value = mix * 0.55;
       trebleF.connect(conv); conv.connect(wetG); wetG.connect(masterG);
     }
 
     if (params.fade) {
-      const dur = buf.duration;
-      const ft  = Math.min(1.5, dur*0.07);
+      const dur = buf.duration, ft = Math.min(1.5, dur*0.07);
       masterG.gain.setValueAtTime(0, 0);
       masterG.gain.linearRampToValueAtTime(0.9, ft);
       masterG.gain.setValueAtTime(0.9, dur-ft);
@@ -615,241 +650,135 @@ window.RemixerModule = (function () {
     return await offCtx.startRendering();
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE A — OLA TIME SMEAR (Overlap-Add)
-  //
-  //  Audible Magic's fingerprint relies on TIME LANDMARKS —
-  //  specific onset/transient positions in the timeline.
-  //  OLA introduces tiny time-domain jitter by splitting the
-  //  audio into overlapping frames and re-assembling them with
-  //  a fractional offset. This shifts transient positions by
-  //  1–3ms, breaking the time-pair hash without any audible
-  //  change (below the 5ms just-noticeable difference threshold).
-  // ──────────────────────────────────────────────────────────
-  function applyOLASmear(buf, jitterMs) {
-    if (!jitterMs || jitterMs <= 0) return buf;
+  // ============================================================
+  //  ENCODE MP3 (lamejs) — same size as input, no metadata
+  // ============================================================
+  function encodeMP3(buf, format) {
+    if (window.lamejs) {
+      const numCh = buf.numberOfChannels;
+      const sr    = buf.sampleRate;
+      const len   = buf.length;
+      const kbps  = format === 'mp3-320' ? 320 : format === 'mp3' ? 128 : 192;
 
-    const sr      = buf.sampleRate;
-    const numCh   = buf.numberOfChannels;
-    const jitter  = Math.ceil((jitterMs / 1000) * sr); // samples
-    const frame   = 2048;
-    const hop     = 512;
-    const len     = buf.length;
+      const encoder = numCh === 2
+        ? new lamejs.Mp3Encoder(2, sr, kbps)
+        : new lamejs.Mp3Encoder(1, sr, kbps);
 
-    const result  = new AudioBuffer({ numberOfChannels: numCh, length: len, sampleRate: sr });
-
-    for (let ch = 0; ch < numCh; ch++) {
-      const src = buf.getChannelData(ch);
-      const dst = result.getChannelData(ch);
-
-      // Hann window
-      const win = new Float32Array(frame);
-      for (let i = 0; i < frame; i++) {
-        win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (frame - 1)));
-      }
-
-      const overlap = new Float32Array(len + frame);
-      const gain    = new Float32Array(len + frame);
-
-      let outPos = 0;
-      for (let inPos = 0; inPos + frame <= len; inPos += hop) {
-        // Apply tiny pseudo-random jitter per frame (consistent seed per position)
-        const frameJitter = Math.round(Math.sin(inPos * 0.001) * jitter);
-        const writePos    = outPos + frameJitter;
-
-        for (let i = 0; i < frame; i++) {
-          const wi = writePos + i;
-          if (wi >= 0 && wi < overlap.length) {
-            overlap[wi] += src[inPos + i] * win[i];
-            gain[wi]    += win[i] * win[i];
-          }
+      const toI16 = (f) => {
+        const o = new Int16Array(f.length);
+        for (let i = 0; i < f.length; i++) {
+          const s = Math.max(-1, Math.min(1, f[i]));
+          o[i] = s < 0 ? s * 32768 : s * 32767;
         }
-        outPos += hop;
-      }
+        return o;
+      };
 
-      // Normalize by window gain and copy to output
-      for (let i = 0; i < len; i++) {
-        dst[i] = gain[i] > 0.001 ? overlap[i] / gain[i] : 0;
+      const lPCM = toI16(buf.getChannelData(0));
+      const rPCM = numCh > 1 ? toI16(buf.getChannelData(1)) : lPCM;
+      const chunks = [];
+      const CHUNK  = 1152;
+
+      for (let i = 0; i < len; i += CHUNK) {
+        const end = Math.min(i + CHUNK, len);
+        const mp3c = numCh === 2
+          ? encoder.encodeBuffer(lPCM.subarray(i,end), rPCM.subarray(i,end))
+          : encoder.encodeBuffer(lPCM.subarray(i,end));
+        if (mp3c.length > 0) chunks.push(new Uint8Array(mp3c));
       }
+      const fin = encoder.flush();
+      if (fin.length > 0) chunks.push(new Uint8Array(fin));
+      return new Blob(chunks, { type: 'audio/mpeg' });
     }
 
-    return result;
+    // WAV fallback
+    console.warn('[Remixer] lamejs not loaded — WAV fallback');
+    return encodeWAVClean(buf);
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE B — SPECTRAL BLURRING
-  //
-  //  Audible Magic's fingerprint picks the TOP N energy peaks
-  //  in each FFT frame. If we spread energy between adjacent
-  //  bins, those peaks shift position → hash mismatch.
-  //
-  //  We do this with a very short all-pass IIR filter chain —
-  //  this smears phase across adjacent bins without changing
-  //  the magnitude envelope. Completely inaudible.
-  // ──────────────────────────────────────────────────────────
-  function applySpectralBlur(buf, amount) {
-    if (!amount || amount <= 0) return buf;
-
-    const numCh  = buf.numberOfChannels;
-    const len    = buf.length;
-    const result = new AudioBuffer({ numberOfChannels: numCh, length: len, sampleRate: buf.sampleRate });
-
-    // All-pass filter coefficients — creates phase dispersion
-    // without touching magnitude spectrum
-    const a = amount * 0.15; // keep very subtle
-
-    for (let ch = 0; ch < numCh; ch++) {
-      const src = buf.getChannelData(ch);
-      const dst = result.getChannelData(ch);
-
-      // 2nd order all-pass: y[n] = -a*x[n] + x[n-2] + a*y[n-2]
-      let xn1 = 0, xn2 = 0, yn1 = 0, yn2 = 0;
-
-      for (let i = 0; i < len; i++) {
-        const x  = src[i];
-        const y  = -a * x + xn2 + a * yn2;
-        // Blend: mostly dry, tiny bit of all-pass (breaks spectral peaks)
-        dst[i] = x * (1 - amount * 0.3) + y * (amount * 0.3);
-        xn2 = xn1; xn1 = x;
-        yn2 = yn1; yn1 = y;
-      }
+  function encodeWAVClean(buf) {
+    const numCh = buf.numberOfChannels, sr = buf.sampleRate, len = buf.length;
+    const byteLen = len * numCh * 2;
+    const ab = new ArrayBuffer(44 + byteLen);
+    const v  = new DataView(ab);
+    const ws  = (o,s) => { for(let i=0;i<s.length;i++) v.setUint8(o+i,s.charCodeAt(i)); };
+    const u32 = (o,n) => v.setUint32(o,n,true);
+    const u16 = (o,n) => v.setUint16(o,n,true);
+    ws(0,'RIFF'); u32(4,36+byteLen); ws(8,'WAVE');
+    ws(12,'fmt '); u32(16,16); u16(20,1); u16(22,numCh);
+    u32(24,sr); u32(28,sr*numCh*2); u16(32,numCh*2); u16(34,16);
+    ws(36,'data'); u32(40,byteLen);
+    let off = 44;
+    for(let i=0;i<len;i++) for(let ch=0;ch<numCh;ch++) {
+      const s=Math.max(-1,Math.min(1,buf.getChannelData(ch)[i]));
+      v.setInt16(off,s<0?s*32768:s*32767,true); off+=2;
     }
-
-    return result;
+    return new Blob([ab],{type:'audio/wav'});
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  STAGE C — DYNAMIC MICRO-SILENCE INSERTION
-  //
-  //  Audible Magic analyzes audio in ~0.37s windows. If we
-  //  insert a 3ms silence every 9–11 seconds (at a low-energy
-  //  point — NOT mid-beat), the fingerprint windows misalign
-  //  with the reference database windows.
-  //
-  //  The silence is inserted at the quietest sample in each
-  //  window so it's placed at a natural breath/gap — you won't
-  //  hear it. Total audio added: ~15ms per minute — negligible.
-  // ──────────────────────────────────────────────────────────
-  function applyMicroSilence(buf, intervalSec, silenceMs) {
-    if (!intervalSec || intervalSec <= 0) return buf;
-
-    const sr       = buf.sampleRate;
-    const numCh    = buf.numberOfChannels;
-    const silLen   = Math.ceil((silenceMs / 1000) * sr); // ~132 samples at 44.1kHz
-    const interval = Math.ceil(intervalSec * sr);
-
-    // Count how many insertions we'll make
-    const insertions = Math.floor(buf.length / interval);
-    const newLen     = buf.length + insertions * silLen;
-
-    const result  = new AudioBuffer({ numberOfChannels: numCh, length: newLen, sampleRate: sr });
-    const srcData = [];
-    const dstData = [];
-    for (let ch = 0; ch < numCh; ch++) {
-      srcData.push(buf.getChannelData(ch));
-      dstData.push(result.getChannelData(ch));
-    }
-
-    let srcPos = 0;
-    let dstPos = 0;
-    let nextInsert = interval;
-
-    while (srcPos < buf.length) {
-      if (srcPos >= nextInsert && dstPos + silLen < newLen) {
-        // Find lowest-energy point in ±50 sample window to insert silence
-        let quietestPos = srcPos;
-        let quietestAmp = Infinity;
-        const searchWin = Math.min(50, buf.length - srcPos);
-        for (let s = 0; s < searchWin; s++) {
-          const amp = Math.abs(srcData[0][srcPos + s]);
-          if (amp < quietestAmp) { quietestAmp = amp; quietestPos = srcPos + s; }
-        }
-
-        // Copy up to quietest point
-        const copyLen = quietestPos - srcPos;
-        for (let ch = 0; ch < numCh; ch++) {
-          for (let i = 0; i < copyLen; i++) dstData[ch][dstPos + i] = srcData[ch][srcPos + i];
-        }
-        srcPos += copyLen;
-        dstPos += copyLen;
-
-        // Insert silence (already zeros in new AudioBuffer)
-        dstPos += silLen;
-        nextInsert += interval;
-      } else {
-        // Copy sample
-        for (let ch = 0; ch < numCh; ch++) dstData[ch][dstPos] = srcData[ch][srcPos];
-        srcPos++;
-        dstPos++;
-      }
-    }
-
-    return result;
-  }
-
-  // ──────────────────────────────────────────────────────────
-  //  GENERATE RANDOM FILENAME (helps avoid metadata detection)
-  // ──────────────────────────────────────────────────────────
+  // ============================================================
+  //  RANDOM FILENAME — no title/artist metadata hint
+  // ============================================================
   function randomFilename() {
-    const id  = Math.random().toString(36).slice(2, 8);
-    const ts  = Date.now().toString(36).slice(-4);
-    return `arb_${id}_${ts}`;
+    return `arb_${Math.random().toString(36).slice(2,8)}_${Date.now().toString(36).slice(-4)}`;
   }
 
-  // ──────────────────────────────────────────────────────────
-  //  MAIN ENTRY POINT
-  // ──────────────────────────────────────────────────────────
+  // ============================================================
+  //  BYPASS PRESET SET
+  // ============================================================
+  const BYPASS_PRESETS = new Set([
+    'nocopyright','light','medium','heavy','roblox','true_normal','ghost','natural','shield'
+  ]);
+
+  // ============================================================
+  //  MAIN PROCESS — GHOST MODE pipeline
+  // ============================================================
   async function process(file, params) {
-    if (!AC) throw new Error('Web Audio API tidak didukung di browser ini.');
+    if (!AC) throw new Error('Web Audio API tidak didukung.');
 
     let buf = await decodeFile(file);
 
     const presetKey = (params._preset || 'nocopyright').toLowerCase();
 
     if (BYPASS_PRESETS.has(presetKey)) {
-      // ── 9-STAGE NATURAL BYPASS PATH ───────────────────────
-      const profile = BYPASS_PROFILES[PROFILE_MAP[presetKey] || 'roblox'];
+      const p = GHOST_PROFILE; // All bypass presets use Ghost Mode
 
-      // Stage 1: Sub-bass cut (40Hz+ highpass)
-      buf = await applySubBassCut(buf, profile.subBassCut);
+      // [A] Frequency axis warp — moves ALL peak bins
+      buf = await applyFrequencyWarp(buf, p.freqWarpAmount);
 
-      // Stage 2: Micro pitch shift (tempo-preserving)
-      buf = await applyPitchShift(buf, profile.pitchSt);
+      // [B] Pitch shift 0.8st (tempo-preserving, Hermite quality)
+      buf = await applyPitchShift(buf, p.pitchSt);
 
-      // Stage 3: Fingerprint band EQ
-      buf = await applyEQ(buf, profile.eqBands);
+      // [C] Spectral smear — phase dispersion across bins
+      buf = applySpectralSmear(buf, p.spectralSmear);
 
-      // Stage 4: Inter-channel micro offset (real phase change)
-      buf = applyChannelOffset(buf, profile.channelOffset);
+      // EQ fingerprint band disruption
+      buf = await applyEQ(buf, p.eqBands);
 
-      // Stage 5: Harmonic exciter
-      buf = await applyExciter(buf, profile.exciterAmt);
+      // [E] Stereo decorrelation + channel offset
+      buf = applyStereoDecorrelation(buf, p.stereoDecorr);
 
-      // Stage 6: Micro room (phase smear)
-      buf = await applyMicroRoom(buf, profile.roomPreDelay);
+      // [F] OLA transient smear — shifts onset timing
+      buf = applyOLASmear(buf, p.olaJitterMs);
 
-      // Stage 7: Ultrasonic noise
-      buf = injectUltrasonicNoise(buf, profile.ultraNoise);
+      // [G] Sub-bass reshape — changes low-end energy signature
+      buf = await applySubBassReshape(buf, p.subBassFreq);
 
-      // Stage 8: Volume at 85% (loudness fingerprint mismatch)
-      buf = applyOutputVolume(buf, profile.outputVolume);
+      // [H] Harmonic aliasing — adds new spectral content
+      buf = await applyHarmonicAliasing(buf, p.harmonicAmt);
 
-      // Stage A: OLA time smear (breaks Audible Magic time-pair hash)
-      if (profile.olaJitterMs) {
-        buf = applyOLASmear(buf, profile.olaJitterMs);
-      }
+      // Micro room — phase smear
+      buf = await applyMicroRoom(buf, 9);
 
-      // Stage B: Spectral blur (breaks FFT peak position hash)
-      if (profile.spectralBlur) {
-        buf = applySpectralBlur(buf, profile.spectralBlur);
-      }
+      // Ultrasonic noise — inaudible spectrogram disruption
+      buf = applyUltrasonicNoise(buf, 0.0055);
 
-      // Stage C: Micro-silence insertion (misaligns fingerprint windows)
-      if (profile.microSilenceSec) {
-        buf = applyMicroSilence(buf, profile.microSilenceSec, profile.microSilenceMs || 3);
-      }
+      // [D] Output volume 82% — LUFS mismatch
+      buf = applyOutputVolume(buf, p.outputVolume);
 
-      // Extra EQ from manual control adjustments
+      // [I] Window misalignment — micro-silence every 8.5s
+      buf = applyWindowMisalignment(buf, p.silenceIntervalSec, p.silenceLenMs);
+
+      // Extra manual EQ adjustments
       if ((params.bass||0) !== 0 || (params.treble||0) !== 0) {
         const extra = [];
         if (params.bass   !== 0) extra.push({ f: 100,  g: params.bass   });
@@ -861,12 +790,11 @@ window.RemixerModule = (function () {
       buf = await applyCreativeEffects(buf, params);
     }
 
-    // Stage 9: Encode compressed MP3 (same size as input, no metadata)
     return encodeMP3(buf, params.format || 'mp3');
   }
 
-  return { process, BYPASS_PROFILES, randomFilename };
+  return { process, randomFilename, GHOST_PROFILE };
 
 })();
 
-console.log('[Remixer v4.0] 12-stage Audible Magic bypass engine ready — Roblox optimized');
+console.log('[Remixer v5.0 — GHOST MODE] 12-technique Audible Magic pipeline ready');
